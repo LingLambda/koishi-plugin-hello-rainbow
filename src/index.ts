@@ -4,10 +4,8 @@ import * as fs from "fs";
 import * as path from "path";
 export const name = "hello-rainbow";
 
-import crypto from 'crypto';
-import { URL } from 'url';
-import queryString from 'query-string';
-import got from 'got';
+import crypto from "crypto";
+import queryString from "query-string";
 
 export const inject = ["http"];
 
@@ -49,9 +47,9 @@ interface WeatherData {
 export const Config: Schema<Config> = Schema.object({
   baseurl: Schema.string()
     .description("api路径")
-    .default("https://api.seniverse.com/v3/weather/now.json"),
+    .default("https://api.seniverse.com/v3"),
   privateKey: Schema.string()
-    .description("api私钥（无论使用公钥还是私钥都是必须的！）")
+    .description("api私钥（无论使用公钥还是私钥加密都是必须的！）")
     .default(""),
   publicKey: Schema.string()
     .description("api公钥（仅在公钥加密时需要）")
@@ -67,7 +65,7 @@ export const Config: Schema<Config> = Schema.object({
     .max(31),
 });
 
-let citys: Map<string, Citys>;
+let citys: Citys[];
 
 export function apply(ctx: Context, config: Config) {
   let req = async (
@@ -76,22 +74,20 @@ export function apply(ctx: Context, config: Config) {
     session: Session,
     city: string,
     day: number
-  ) => "";
+  ) => null;
   if (config.encodeType === "公钥") {
     req = publicRequest;
   } else if (config.encodeType === "私钥") {
     req = privateRequest;
   }
-  const _citys = initCityFile().data;
-  //构建成哈希表优化查询效率
-  citys = new Map(_citys.map((item) => [item.城市简称.split("/").pop(), item]));
-
+  citys = initCityFile().data;
   ctx
-    .command("天气 <city> <day>", "获取指定城市天气")
-    .action(async ({ session }, city, day) => {
+    .command("天气 <city> [day]", "获取指定城市天气")
+    .alias("weather")
+    .action(async ({ session }, city, day?) => {
       const cityId = await queryCityId(city);
       if (!cityId) {
-        await session.send(`未找到${city}`);
+        await session.send(`未找到城市：${city} 区级请用 北京/朝阳 写法`);
         return;
       }
       let dayNum = config.defaultDay;
@@ -109,6 +105,15 @@ export function apply(ctx: Context, config: Config) {
     .example("天气 北京/朝阳  获取北京市朝阳区天气");
 }
 
+const initCityFile = (): { data: Citys[] } => {
+  const citysStr = fs.readFileSync(path.join(__dirname, "citys.csv"), "utf-8");
+  const citys: { data: Citys[] } = Papa.parse(citysStr, {
+    header: true,
+    skipEmptyLines: true,
+  });
+  return citys;
+};
+
 const privateRequest = async (
   ctx: Context,
   config: Config,
@@ -116,10 +121,13 @@ const privateRequest = async (
   city: string,
   day: number
 ) => {
-  const { baseurl, privateKey } = config;
+  let { baseurl, privateKey } = config;
+  baseurl = baseurl.endsWith("/") ? baseurl.slice(0, -1) : baseurl;
+  baseurl += "/weather/daily.json";
 
+  let res: { results: { daily: any; }[]; };
   try {
-    const res = await ctx.http.get(baseurl, {
+    res = await ctx.http.get(baseurl, {
       params: {
         key: privateKey,
         location: city,
@@ -127,51 +135,21 @@ const privateRequest = async (
         days: day,
       },
     });
-    const weatherArr = res.results[0].daily;
-    if (weatherArr && weatherArr.length < day) {
-      session.send(
-        `免费用户只能获取最近3天的信息：\n${toHumanReadable(weatherArr)}`
-      );
-      return;
-    }
-    await session.send(toHumanReadable(weatherArr) || "收到的返回为空");
-    return;
   } catch (err) {
-    console.log(err);
     if (err.response && err.response.status === 403) {
-      await session.send("🔒 请求被拒绝 请检查密钥设置");
+      session.send("🔒 请求被拒绝 查询的是付费区域或密钥设置错误");
     } else if (err.response && err.response.status === 404) {
-      await session.send("🚫 请求失败 请检查url设置");
+      session.send("🚫 请求失败 请检查url设置");
     } else {
-      await session.send("❌ 未知错误，请查看日志！");
+      session.send("❌ 未知错误，请查看日志！");
       ctx.logger.error(err);
     }
-  }
-  return "";
-};
-
-
-// 心知 V4 接口签名
-function signature(urlString, paramsObj,privateKey) {
-  if (!urlString) {
     return;
   }
-  const obj = URL.parse(urlString, true, true);
-  const params = Object.assign({}, paramsObj, obj.query);
-  let result = queryString.stringify(params, { encode: false });
-  let encodeResult = queryString.stringify(params, { encode: true });
 
-  const sig = crypto
-    .createHmac('sha1', privateKey)
-    .update(result, 'utf8')
-    .digest('base64');
-
-  result += `&sig=${encodeURIComponent(sig)}`;
-  encodeResult += `&sig=${encodeURIComponent(sig)}`;
-  console.log('浏览器访问链接: ', `${obj.protocol}//${obj.host}${obj.pathname}?${encodeResult}`);
-
-  return result;
-}
+  await sendInfoToUser(res, session, day);
+  return;
+};
 
 const publicRequest = async (
   ctx: Context,
@@ -180,26 +158,88 @@ const publicRequest = async (
   city: string,
   day: number
 ) => {
-  const { baseurl, privateKey, publicKey } = config;
+  const { privateKey, publicKey } = config;
+  let baseurl = config.baseurl;
+  baseurl = baseurl.endsWith("/") ? baseurl.slice(0, -1) : baseurl;
+  baseurl += "/weather/daily.json";
   const ts = Math.round(Date.now() / 1000);
-  const ttl = 600;
-  ctx.http.get(baseurl,{params:{
-    ttl, ts,
+  const ttl = 60;
+
+  const url = signUrl(baseurl, privateKey, {
+    ttl,
+    ts,
     public_key: publicKey,
     location: city,
     start: 0,
     days: day,
-
-  }})
-
-  session.send(citys.get(city).行政归属);
-  return "";
+  });
+  let res: { results: { daily: any; }[]; };
+  try {
+    res = await ctx.http.get(url.toString());
+  } catch (err) {
+    if (err.response && err.response.status === 403) {
+      session.send("🔒 请求被拒绝 查询的是付费区域或密钥设置错误");
+    } else if (err.response && err.response.status === 404) {
+      session.send("🚫 请求失败 请检查url设置");
+    } else {
+      session.send("❌ 未知错误，请查看日志！");
+      ctx.logger.error(err);
+    }
+    return;
+  }
+  await sendInfoToUser(res, session, day);
+  return;
 };
 
-const initCityFile = (): { data: Citys[] } => {
-  const citysStr = fs.readFileSync(path.join(__dirname, "citys.csv"), "utf-8");
-  return Papa.parse(citysStr, { header: true, skipEmptyLines: true });
+const sendInfoToUser = async (
+  res: { results: { daily: any }[] },
+  session: Session,
+  day: number
+) => {
+  const weatherArr = res?.results[0]?.daily;
+  if (!weatherArr) {
+    await session.send("收到的返回为空");
+    return;
+  }
+  if (weatherArr.length < day) {
+    await session.send(
+      `免费用户只能获取最近3天的信息：\n${toHumanReadable(weatherArr)}`
+    );
+    return;
+  }
+  await session.send(toHumanReadable(weatherArr));
+  return;
 };
+
+// 心知 V4 接口签名
+export function signUrl(
+  baseurl: string,
+  privateKey: string,
+  paramsObj: Record<string, string | number | boolean> = {}
+): URL {
+  if (!baseurl) return;
+
+  const obj = new URL(baseurl);
+
+  // 合并用户参数到 URL 查询参数中
+  for (const [key, value] of Object.entries(paramsObj)) {
+    obj.searchParams.set(key, String(value));
+  }
+
+  // 构造用于签名的原始 query 字符串（确保顺序）
+  const sortedParams = Array.from(obj.searchParams.entries()).sort();
+  const rawQuery = sortedParams.map(([k, v]) => `${k}=${v}`).join("&");
+
+  // 生成 HMAC-SHA1 签名并编码
+  const sig = crypto
+    .createHmac("sha1", privateKey)
+    .update(rawQuery, "utf8")
+    .digest("base64");
+
+  obj.searchParams.set("sig", sig);
+
+  return obj;
+}
 
 const toHumanReadable = (dataArr: WeatherData[]) => {
   let res = "";
@@ -238,14 +278,10 @@ const toHumanReadable = (dataArr: WeatherData[]) => {
 };
 
 const queryCityId = async (city: string) => {
-  city = city.replaceAll("市", "").replaceAll("区", "");
-  if (city.includes("/")) {
-    for (const [_, value] of citys.entries()) {
-      if (value.城市简称.endsWith(city)) {
-        return value.城市ID;
-      }
+  city = city.replaceAll("市", "").replaceAll("区", "").trim();
+  for (const item of citys) {
+    if (item.城市简称.trim().endsWith(city)) {
+      return item.城市ID;
     }
-  } else {
-    return citys.get(city).城市ID;
   }
 };
