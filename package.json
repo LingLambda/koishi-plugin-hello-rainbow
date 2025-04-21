@@ -34,7 +34,9 @@
   },
   "dependencies": {
     "@koishijs/plugin-http": "^0.6.3",
-    "papaparse": "^5.5.2"
+    "got": "^14.4.7",
+    "papaparse": "^5.5.2",
+    "query-string": "^9.1.1"
   },
   "devDependencies": {
     "@types/papaparse": "^5"

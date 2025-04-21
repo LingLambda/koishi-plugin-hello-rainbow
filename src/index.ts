@@ -4,11 +4,17 @@ import * as fs from "fs";
 import * as path from "path";
 export const name = "hello-rainbow";
 
+import crypto from 'crypto';
+import { URL } from 'url';
+import queryString from 'query-string';
+import got from 'got';
+
 export const inject = ["http"];
 
 export interface Config {
   baseurl: string;
-  apiKey: string;
+  privateKey: string;
+  publicKey: string;
   encodeType: "公钥" | "私钥";
   defaultDay: number;
 }
@@ -44,7 +50,12 @@ export const Config: Schema<Config> = Schema.object({
   baseurl: Schema.string()
     .description("api路径")
     .default("https://api.seniverse.com/v3/weather/now.json"),
-  apiKey: Schema.string().description("api公钥/私钥").default(""),
+  privateKey: Schema.string()
+    .description("api私钥（无论使用公钥还是私钥都是必须的！）")
+    .default(""),
+  publicKey: Schema.string()
+    .description("api公钥（仅在公钥加密时需要）")
+    .default(""),
   encodeType: Schema.union(["公钥", "私钥"])
     .role("")
     .description("建议使用公钥加密更安全")
@@ -105,18 +116,17 @@ const privateRequest = async (
   city: string,
   day: number
 ) => {
-  const { baseurl, apiKey } = config;
+  const { baseurl, privateKey } = config;
 
   try {
     const res = await ctx.http.get(baseurl, {
       params: {
-        key: apiKey,
+        key: privateKey,
         location: city,
         start: 0,
         days: day,
       },
     });
-    console.log(res);
     const weatherArr = res.results[0].daily;
     if (weatherArr && weatherArr.length < day) {
       session.send(
@@ -138,6 +148,57 @@ const privateRequest = async (
     }
   }
   return "";
+};
+
+
+// 心知 V4 接口签名
+function signature(urlString, paramsObj,privateKey) {
+  if (!urlString) {
+    return;
+  }
+  const obj = URL.parse(urlString, true, true);
+  const params = Object.assign({}, paramsObj, obj.query);
+  let result = queryString.stringify(params, { encode: false });
+  let encodeResult = queryString.stringify(params, { encode: true });
+
+  const sig = crypto
+    .createHmac('sha1', privateKey)
+    .update(result, 'utf8')
+    .digest('base64');
+
+  result += `&sig=${encodeURIComponent(sig)}`;
+  encodeResult += `&sig=${encodeURIComponent(sig)}`;
+  console.log('浏览器访问链接: ', `${obj.protocol}//${obj.host}${obj.pathname}?${encodeResult}`);
+
+  return result;
+}
+
+const publicRequest = async (
+  ctx: Context,
+  config: Config,
+  session: Session,
+  city: string,
+  day: number
+) => {
+  const { baseurl, privateKey, publicKey } = config;
+  const ts = Math.round(Date.now() / 1000);
+  const ttl = 600;
+  ctx.http.get(baseurl,{params:{
+    ttl, ts,
+    public_key: publicKey,
+    location: city,
+    start: 0,
+    days: day,
+
+  }})
+
+  session.send(citys.get(city).行政归属);
+  return "";
+};
+
+const initCityFile = (): { data: Citys[] } => {
+  const citysStr = fs.readFileSync(path.join(__dirname, "citys.csv"), "utf-8");
+  return Papa.parse(citysStr, { header: true, skipEmptyLines: true });
 };
 
 const toHumanReadable = (dataArr: WeatherData[]) => {
@@ -174,28 +235,6 @@ const toHumanReadable = (dataArr: WeatherData[]) => {
   }
 
   return res;
-};
-
-// https://api.seniverse.com/v3/weather/daily.json?key=your_api_key&location=beijing&language=zh-Hans&unit=c&start=0&days=5
-const publicRequest = async (
-  ctx: Context,
-  config: Config,
-  session: Session,
-  city: string,
-  day: number
-) => {
-  const ts = Math.round(Date.now() / 1000);
-  const ttl = 600;
-  const latitude = 29.5617;
-  const longitude = 120.0962;
-  let url = "https://api.seniverse.com/v4?fields=precip_minutely";
-  session.send(citys.get(city).行政归属);
-  return "";
-};
-
-const initCityFile = (): { data: Citys[] } => {
-  const citysStr = fs.readFileSync(path.join(__dirname, "citys.csv"), "utf-8");
-  return Papa.parse(citysStr, { header: true, skipEmptyLines: true });
 };
 
 const queryCityId = async (city: string) => {
