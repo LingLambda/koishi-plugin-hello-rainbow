@@ -8,15 +8,35 @@
     "lib",
     "dist"
   ],
+  "contributors": [
+    "LingLambda <abc1514671906@163.com>"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LingLambda/koishi-plugin-hello-rainbow.git"
+  },
   "license": "MIT",
-  "scripts": {},
   "keywords": [
     "chatbot",
     "koishi",
-    "plugin"
+    "plugin",
+    "weather"
   ],
-  "devDependencies": {},
   "peerDependencies": {
-    "koishi": "4.18.1"
+    "koishi": "^4.0.0"
+  },
+  "koishi": {
+    "service": {
+      "required": [
+        "http"
+      ]
+    }
+  },
+  "dependencies": {
+    "@koishijs/plugin-http": "^0.6.3",
+    "papaparse": "^5.5.2"
+  },
+  "devDependencies": {
+    "@types/papaparse": "^5"
   }
 }
