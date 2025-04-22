@@ -1,21 +1,10 @@
-import { Context, Schema, Session } from "koishi";
+import { Context } from "koishi";
 import Papa from "papaparse";
 import * as fs from "fs";
 import * as path from "path";
-export const name = "hello-rainbow";
-
 import crypto from "crypto";
-import queryString from "query-string";
-
-export const inject = ["http"];
-
-export interface Config {
-  baseurl: string;
-  privateKey: string;
-  publicKey: string;
-  encodeType: "公钥" | "私钥";
-  defaultDay: number;
-}
+import { Rainbow } from "./service";
+import { Config } from "./config";
 
 interface Citys {
   序号: string;
@@ -44,34 +33,16 @@ interface WeatherData {
   humidity: string; // 湿度（单位：百分比），例如 "78"
 }
 
-export const Config: Schema<Config> = Schema.object({
-  baseurl: Schema.string()
-    .description("api路径")
-    .default("https://api.seniverse.com/v3"),
-  privateKey: Schema.string()
-    .description("api私钥（无论使用公钥还是私钥加密都是必须的！）")
-    .default(""),
-  publicKey: Schema.string()
-    .description("api公钥（仅在公钥加密时需要）")
-    .default(""),
-  encodeType: Schema.union(["公钥", "私钥"])
-    .role("")
-    .description("建议使用公钥加密更安全")
-    .default("私钥"),
-  defaultDay: Schema.number()
-    .description("默认获取最近多少天的天气")
-    .default(3)
-    .min(0)
-    .max(31),
-});
-
 let citys: Citys[];
 
 export function apply(ctx: Context, config: Config) {
+  ctx.plugin(Rainbow);
+
   let req = async (
     ctx: Context,
-    config: Config,
-    session: Session,
+    baseurl: string,
+    privateKey: string,
+    publicKey: string,
     city: string,
     day: number
   ) => null;
@@ -90,7 +61,9 @@ export function apply(ctx: Context, config: Config) {
         await session.send(`未找到城市：${city} 区级请用 北京/朝阳 写法`);
         return;
       }
-      let dayNum = config.defaultDay;
+
+      const { baseurl, privateKey, publicKey, defaultDay } = config;
+      let dayNum = defaultDay;
       if (day) {
         dayNum = Number(day);
         if (!Number.isInteger(dayNum) || dayNum <= 0) {
@@ -98,7 +71,15 @@ export function apply(ctx: Context, config: Config) {
           return;
         }
       }
-      await req(ctx, config, session, cityId, dayNum);
+      const res = await req(
+        ctx,
+        baseurl,
+        privateKey,
+        publicKey,
+        cityId,
+        dayNum
+      );
+      await session.send(res);
     })
     .example("天气 北京 获取北京天气")
     .example("天气 北京 5 获取最近5天的北京天气")
@@ -114,18 +95,18 @@ const initCityFile = (): { data: Citys[] } => {
   return citys;
 };
 
-const privateRequest = async (
+export const privateRequest = async (
   ctx: Context,
-  config: Config,
-  session: Session,
+  baseurl: string,
+  privateKey: string,
+  publicKey: string,
   city: string,
   day: number
 ) => {
-  let { baseurl, privateKey } = config;
   baseurl = baseurl.endsWith("/") ? baseurl.slice(0, -1) : baseurl;
   baseurl += "/weather/daily.json";
 
-  let res: { results: { daily: any; }[]; };
+  let res: { results: { daily: any }[] };
   try {
     res = await ctx.http.get(baseurl, {
       params: {
@@ -137,29 +118,26 @@ const privateRequest = async (
     });
   } catch (err) {
     if (err.response && err.response.status === 403) {
-      session.send("🔒 请求被拒绝 查询的是付费区域或密钥设置错误");
+      return "🔒 请求被拒绝 查询的是付费区域或密钥设置错误";
     } else if (err.response && err.response.status === 404) {
-      session.send("🚫 请求失败 请检查url设置");
+      return "🚫 请求失败 请检查url设置";
     } else {
-      session.send("❌ 未知错误，请查看日志！");
       ctx.logger.error(err);
+      return "❌ 未知错误，请查看日志！";
     }
-    return;
   }
 
-  await sendInfoToUser(res, session, day);
-  return;
+  return await decodeInfo(res, day);
 };
 
-const publicRequest = async (
+export const publicRequest = async (
   ctx: Context,
-  config: Config,
-  session: Session,
+  baseurl: string,
+  privateKey: string,
+  publicKey: string,
   city: string,
   day: number
 ) => {
-  const { privateKey, publicKey } = config;
-  let baseurl = config.baseurl;
   baseurl = baseurl.endsWith("/") ? baseurl.slice(0, -1) : baseurl;
   baseurl += "/weather/daily.json";
   const ts = Math.round(Date.now() / 1000);
@@ -173,50 +151,42 @@ const publicRequest = async (
     start: 0,
     days: day,
   });
-  let res: { results: { daily: any; }[]; };
+  let res: { results: { daily: any }[] };
   try {
     res = await ctx.http.get(url.toString());
   } catch (err) {
     if (err.response && err.response.status === 403) {
-      session.send("🔒 请求被拒绝 查询的是付费区域或密钥设置错误");
+      if (err.response.data.status_code === "AP010006") {
+        return "🔒 请求被拒绝 查询的是付费区域";
+      }
+      return "🔒 请求被拒绝 可能是密钥设置错误";
     } else if (err.response && err.response.status === 404) {
-      session.send("🚫 请求失败 请检查url设置");
+      return "🚫 请求失败 请检查url设置";
     } else {
-      session.send("❌ 未知错误，请查看日志！");
       ctx.logger.error(err);
+      return "❌ 未知错误，请查看日志！";
     }
-    return;
   }
-  await sendInfoToUser(res, session, day);
-  return;
+  return await decodeInfo(res, day);
 };
 
-const sendInfoToUser = async (
-  res: { results: { daily: any }[] },
-  session: Session,
-  day: number
-) => {
+const decodeInfo = async (res: { results: { daily: any }[] }, day: number) => {
   const weatherArr = res?.results[0]?.daily;
   if (!weatherArr) {
-    await session.send("收到的返回为空");
-    return;
+    return "收到的返回为空";
   }
   if (weatherArr.length < day) {
-    await session.send(
-      `免费用户只能获取最近3天的信息：\n${toHumanReadable(weatherArr)}`
-    );
-    return;
+    return `免费用户只能获取最近3天的信息：\n${toHumanReadable(weatherArr)}`;
   }
-  await session.send(toHumanReadable(weatherArr));
-  return;
+  return toHumanReadable(weatherArr);
 };
 
 // 心知 V4 接口签名
-export function signUrl(
+const signUrl = (
   baseurl: string,
   privateKey: string,
   paramsObj: Record<string, string | number | boolean> = {}
-): URL {
+): URL => {
   if (!baseurl) return;
 
   const obj = new URL(baseurl);
@@ -239,7 +209,7 @@ export function signUrl(
   obj.searchParams.set("sig", sig);
 
   return obj;
-}
+};
 
 const toHumanReadable = (dataArr: WeatherData[]) => {
   let res = "";
@@ -277,7 +247,7 @@ const toHumanReadable = (dataArr: WeatherData[]) => {
   return res;
 };
 
-const queryCityId = async (city: string) => {
+export const queryCityId = async (city: string) => {
   city = city.replaceAll("市", "").replaceAll("区", "").trim();
   for (const item of citys) {
     if (item.城市简称.trim().endsWith(city)) {
@@ -285,3 +255,5 @@ const queryCityId = async (city: string) => {
     }
   }
 };
+
+export * from "./config";

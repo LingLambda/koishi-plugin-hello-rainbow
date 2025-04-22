@@ -29,13 +29,15 @@
     "service": {
       "required": [
         "http"
+      ],
+      "implements": [
+        "rainbow"
       ]
     }
   },
   "dependencies": {
     "@koishijs/plugin-http": "^0.6.3",
-    "papaparse": "^5.5.2",
-    "query-string": "^9.1.1"
+    "papaparse": "^5.5.2"
   },
   "devDependencies": {
     "@types/papaparse": "^5"
