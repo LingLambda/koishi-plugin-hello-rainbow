@@ -1,4 +1,5 @@
 import { Schema } from "koishi";
+import { Rainbow } from "./service";
 
 export const name = "hello-rainbow";
 export const inject = ["http"];
@@ -21,6 +22,7 @@ export const Config: Schema<Config> = Schema.object({
     .description("api路径")
     .default("https://api.seniverse.com/v3"),
   privateKey: Schema.string()
+    .role("secret")
     .description("api私钥（无论使用公钥还是私钥加密都是必须的！）")
     .default(""),
   publicKey: Schema.string()
@@ -36,3 +38,9 @@ export const Config: Schema<Config> = Schema.object({
     .min(0)
     .max(31),
 });
+
+declare module "koishi" {
+  interface Context {
+    rainbow: Rainbow;
+  }
+}

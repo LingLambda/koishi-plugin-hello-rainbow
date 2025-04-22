@@ -34,9 +34,8 @@ interface WeatherData {
 }
 
 let citys: Citys[];
-
 export function apply(ctx: Context, config: Config) {
-  ctx.plugin(Rainbow);
+  ctx.plugin(Rainbow, config);
 
   let req = async (
     ctx: Context,
@@ -51,7 +50,7 @@ export function apply(ctx: Context, config: Config) {
   } else if (config.encodeType === "私钥") {
     req = privateRequest;
   }
-  citys = initCityFile().data;
+  initCityFile();
   ctx
     .command("天气 <city> [day]", "获取指定城市天气")
     .alias("weather")
@@ -86,13 +85,13 @@ export function apply(ctx: Context, config: Config) {
     .example("天气 北京/朝阳  获取北京市朝阳区天气");
 }
 
-const initCityFile = (): { data: Citys[] } => {
+export const initCityFile = () => {
   const citysStr = fs.readFileSync(path.join(__dirname, "citys.csv"), "utf-8");
-  const citys: { data: Citys[] } = Papa.parse(citysStr, {
+  const citysObj: { data: Citys[] } = Papa.parse(citysStr, {
     header: true,
     skipEmptyLines: true,
   });
-  return citys;
+  citys = citysObj.data;
 };
 
 export const privateRequest = async (
