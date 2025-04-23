@@ -234,15 +234,14 @@ const toHumanReadable = (dataArr: WeatherData[]) => {
       wind_scale,
       humidity,
     } = data;
-    res += `
-    ${date === today ? date + "（今天）" : date}
-    天气：${text_day === text_night ? text_day : `${text_day} 转 ${text_night}`}
-    温度：${low} - ${high} ℃
-    湿度：${humidity} %
-    ${wind_direction}风${wind_scale}级
-    `;
+    res +=
+    `${date === today ? date + "（今天）" : date}\n` +
+    `    天气：${text_day === text_night ? text_day : `${text_day} 转 ${text_night}`}\n` +
+    `    温度：${low} - ${high} ℃\n` +
+    `    湿度：${humidity} %\n` +
+    `    ${wind_direction}风${wind_scale}级\n\n`;
   }
-
+  console.log(res)
   return res;
 };
 
