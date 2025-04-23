@@ -237,8 +237,8 @@ const toHumanReadable = (dataArr: WeatherData[]) => {
     res += `
     ${date === today ? date + "（今天）" : date}
     天气：${text_day === text_night ? text_day : `${text_day} 转 ${text_night}`}
-    温度：${low} - ${high}
-    湿度：${humidity}
+    温度：${low} - ${high} ℃
+    湿度：${humidity} %
     ${wind_direction}风${wind_scale}级
     `;
   }
