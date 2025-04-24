@@ -234,12 +234,13 @@ const toHumanReadable = (dataArr: WeatherData[]) => {
       wind_scale,
       humidity,
     } = data;
+    const is = wind_direction.startsWith('无持续风向');
     res +=
     `${date === today ? date + "（今天）" : date}\n` +
     `    天气：${text_day === text_night ? text_day : `${text_day} 转 ${text_night}`}\n` +
     `    温度：${low} - ${high} ℃\n` +
     `    湿度：${humidity} %\n` +
-    `    ${wind_direction}风${wind_scale}级\n\n`;
+    `    ${wind_direction}${is?"":"风"}${wind_scale}级\n\n`;
   }
   console.log(res)
   return res;
